@@ -1,23 +1,20 @@
 {
-  "name": "homebridge-mysqueezebox",
-  "version": "0.0.3",
-  "description": "mysqueezebox plugin for homebridge: https://github.com/nfarina/homebridge",
-  "license": "ISC",
-  "keywords": [
-    "homebridge-plugin"
-  ],
+  "name": "homebridge-mysqueezebox-v2",
+  "version": "2.0.0",
+  "description": "Updated Homebridge plugin for MySqueezebox compatible with Homebridge v2",
+  "main": "index.js",
+  "keywords": ["homebridge-plugin"],
+  "engines": {
+    "homebridge": ">=2.0.0",
+    "node": ">=16.0.0"
+  },
   "repository": {
     "type": "git",
-    "url": "git://github.com/nriley/homebridge-mysqueezebox.git"
+    "url": "https://github.com/nilthing9/homebridge.v2.-mysqueezebox.git"
   },
-  "bugs": {
-    "url": "http://github.com/nriley/homebridge-mysqueezebox/issues"
-  },
-  "engines": {
-    "node": ">=6.11.1",
-    "homebridge": ">=0.4.22"
-  },
+  "author": "nilthing9",
+  "license": "MIT",
   "dependencies": {
-    "request": ">=2.81.0"
+    "axios": "^1.6.0"
   }
 }
