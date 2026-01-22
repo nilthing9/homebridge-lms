@@ -1,25 +1,9 @@
-/**
- * homebridge-mysqueezebox-v2
- * LMS / Lyrion Music Server platform plugin
- * Auto-discovers all players and exposes them as Lightbulbs
- */
+'use strict';
 
-const axios = require("axios");
+const dgram = require('dgram');
+const os = require('os');
 
-let Service, Characteristic, PlatformAccessory, UUIDGen;
-
-module.exports = (homebridge) => {
-  Service = homebridge.hap.Service;
-  Characteristic = homebridge.hap.Characteristic;
-  PlatformAccessory = homebridge.platformAccessory;
-  UUIDGen = homebridge.hap.uuid;
-
-  homebridge.registerPlatform(
-    "homebridge-mysqueezebox-v2",
-    "LMSPlatform",
-    LMSPlatform
-  );
-};
+let Accessory, Service, Characteristic, UUIDGen;
 
 class LMSPlatform {
   constructor(log, config, api) {
@@ -27,115 +11,86 @@ class LMSPlatform {
     this.config = config || {};
     this.api = api;
 
-    this.serverUrl = this.config.serverurl || "http://localhost:9000";
-    this.pollInterval = (this.config.updateInterval || 10) * 1000;
-    this.debug = !!this.config.debug;
+    this.name = this.config.name || 'Lyrion Music Server';
+    this.autoDiscover = this.config.autoDiscover !== false; // default true
+    this.lmsHost = this.config.lmsHost || null;
+    this.lmsPort = this.config.lmsPort || 9000;
+    this.debug = this.config.debug || false;
 
-    this.accessories = new Map();
+    this.players = [];
 
-    if (!api) return;
+    this.log.info('LMSPlatform initialising...');
+    this.log.info(`AutoDiscover: ${this.autoDiscover}`);
+    if (this.lmsHost) this.log.info(`Configured LMS Host: ${this.lmsHost}:${this.lmsPort}`);
 
-    api.on("didFinishLaunching", () => {
-      this.log.info("LMS platform launched, discovering players…");
-      this.discoverPlayers();
-      setInterval(() => this.discoverPlayers(), this.pollInterval);
-    });
+    if (api) {
+      this.api.on('didFinishLaunching', () => {
+        this.log.info('Homebridge finished launching');
+
+        if (this.autoDiscover) {
+          this.discoverLMS();
+        } else if (this.lmsHost) {
+          this.connectToLMS(this.lmsHost, this.lmsPort);
+        } else {
+          this.log.error('No LMS host configured and autoDiscover disabled');
+        }
+      });
+    }
   }
 
   configureAccessory(accessory) {
-    this.accessories.set(accessory.UUID, accessory);
+    // cached accessories restore
+    this.log.info(`Restoring cached accessory: ${accessory.displayName}`);
   }
 
-  async lmsRequest(params) {
-    try {
-      const res = await axios.post(
-        `${this.serverUrl}/jsonrpc.js`,
-        {
-          id: 1,
-          method: "slim.request",
-          params,
-        },
-        { timeout: 3000 }
-      );
-      return res.data.result;
-    } catch (err) {
-      this.log.error("LMS request failed:", err.message);
-      return null;
-    }
+  discoverLMS() {
+    this.log.info('Starting LMS auto-discovery...');
+
+    const socket = dgram.createSocket('udp4');
+    socket.bind(3483, () => {
+      socket.setBroadcast(true);
+      const message = Buffer.from('eIPAD\0NAME\0JSON\0VERS\01.0\0');
+      socket.send(message, 0, message.length, 3483, '255.255.255.255');
+    });
+
+    socket.on('message', (msg, rinfo) => {
+      const data = msg.toString();
+      if (this.debug) this.log.info(`Discovery response from ${rinfo.address}: ${data}`);
+
+      if (!this.lmsHost) {
+        this.lmsHost = rinfo.address;
+        this.log.info(`Discovered LMS at ${this.lmsHost}:${this.lmsPort}`);
+        this.connectToLMS(this.lmsHost, this.lmsPort);
+      }
+    });
+
+    setTimeout(() => {
+      socket.close();
+      if (!this.lmsHost) {
+        this.log.error('No LMS servers discovered');
+      }
+    }, 5000);
   }
 
-  async discoverPlayers() {
-    const result = await this.lmsRequest(["", ["players", "0", "100"]]);
-    if (!result || !result.players_loop) {
-      this.log.warn("No LMS players found");
-      return;
-    }
-
-    for (const player of result.players_loop) {
-      const uuid = UUIDGen.generate(player.playerid);
-
-      if (this.accessories.has(uuid)) continue;
-
-      const accessory = new PlatformAccessory(player.name, uuid);
-      accessory.context.player = player;
-      this.setupAccessory(accessory);
-
-      this.api.registerPlatformAccessories(
-        "homebridge-mysqueezebox-v2",
-        "LMSPlatform",
-        LMSPlatform
-      );
-
-      this.accessories.set(uuid, accessory);
-      this.log.info(`Added LMS player: ${player.name}`);
-    }
+  connectToLMS(host, port) {
+    this.log.info(`Connecting to LMS at ${host}:${port}`);
+    // next stage: JSON-RPC handshake + player enumeration
   }
 
-  setupAccessory(accessory) {
-    const player = accessory.context.player;
-
-    accessory.getService(Service.AccessoryInformation)
-      .setCharacteristic(Characteristic.Manufacturer, "Lyrion / Logitech")
-      .setCharacteristic(Characteristic.Model, "Squeezebox Player")
-      .setCharacteristic(Characteristic.SerialNumber, player.playerid);
-
-    const service =
-      accessory.getService(Service.Lightbulb) ||
-      accessory.addService(Service.Lightbulb, player.name);
-
-    service.getCharacteristic(Characteristic.On)
-      .onGet(() => this.getPower(player))
-      .onSet((value) => this.setPower(player, value));
-
-    service.getCharacteristic(Characteristic.Brightness)
-      .onGet(() => this.getVolume(player))
-      .onSet((value) => this.setVolume(player, value));
-  }
-
-  async getPower(player) {
-    const res = await this.lmsRequest([player.playerid, ["mode", "?"]]);
-    return res === "play";
-  }
-
-  async setPower(player, value) {
-    await this.lmsRequest([
-      player.playerid,
-      [value ? "play" : "pause"],
-    ]);
-  }
-
-  async getVolume(player) {
-    const res = await this.lmsRequest([
-      player.playerid,
-      ["mixer", "volume", "?"],
-    ]);
-    return parseInt(res || 0, 10);
-  }
-
-  async setVolume(player, value) {
-    await this.lmsRequest([
-      player.playerid,
-      ["mixer", "volume", value],
-    ]);
+  discoverDevices() {
+    return [];
   }
 }
+
+module.exports = (api) => {
+  Accessory = api.platformAccessory;
+  Service = api.hap.Service;
+  Characteristic = api.hap.Characteristic;
+  UUIDGen = api.hap.uuid;
+
+  api.registerPlatform(
+    'homebridge-mysqueezebox-v2',  // MUST match package.json "name"
+    'LMSPlatform',                 // MUST match config.json "platform"
+    LMSPlatform
+  );
+};
