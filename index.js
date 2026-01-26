@@ -89,7 +89,7 @@ module.exports = (api) => {
   UUIDGen = api.hap.uuid;
 
   api.registerPlatform(
-    'homebridge-mysqueezebox-v2',  // MUST match package.json "name"
+    'homebridge.v2.-mysqueezebox',  // MUST match package.json "name"
     'LMSPlatform',                 // MUST match config.json "platform"
     LMSPlatform
   );
